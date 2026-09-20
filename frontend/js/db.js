@@ -135,7 +135,11 @@ async function _attachShard(shardBytes) {
 function _deriveState(row) {
   if (row.error_stage) return "failed";
   if (row.summary && row.processed_at) return "ready";
-  if (row.transcript && !row.summary) return "processing";
+  // A completed row without a usable summary is not actively running.
+  // Older backends could persist an empty LLM response and still set
+  // processed_at; showing that as "Summarizing" forever is misleading.
+  if (row.processed_at) return "skipped";
+  if (row.transcript) return "processing";
   return "waiting";
 }
 

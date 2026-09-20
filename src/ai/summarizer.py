@@ -103,7 +103,21 @@ class Summarizer:
             # temperature=0.3,
             timeout=180,
         )
+        if not response.choices:
+            raise ValueError(
+                "API returned no choices — likely content filter or quota exceeded"
+            )
+
         result = response.choices[0].message.content
+        if not result or not result.strip():
+            # Some OpenAI-compatible reasoning models can consume completion
+            # tokens without emitting any visible message content.  Treating
+            # that as success leaves a processed lecture with no summary, so
+            # the frontend appears to be "Summarizing" forever and later runs
+            # skip it.  Raising here lets summarize() try the next configured
+            # model/provider instead.
+            raise ValueError("API returned an empty summary")
+        result = result.strip()
         elapsed = time.time() - t0
         # Token usage helps explain run cost — every provider's billing is
         # token-based, and rate-limit decisions key off prompt size much

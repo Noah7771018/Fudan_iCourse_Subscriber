@@ -418,8 +418,10 @@ class Database:
                WHERE l.processed_at IS NOT NULL
                  AND l.transcript IS NOT NULL
                  AND length(trim(l.transcript)) >= ?
-                 AND l.summary IS NOT NULL
-                 AND length(trim(l.summary)) < ?"""
+                 AND (
+                     l.summary IS NULL
+                     OR length(trim(l.summary)) < ?
+                 )"""
         )
         params: list = [min_transcript_chars, min_summary_chars]
         if course_id:

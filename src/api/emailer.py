@@ -286,8 +286,10 @@ class Emailer:
 
     def _deliver(self, msg, variant: str, attempts: int = 3) -> bool:
         """Send one MIME variant, logging the SMTP stage on failure."""
-        payload = msg.as_bytes()
-        print(f"[Emailer] {variant}: {len(payload) / 1024 / 1024:.2f} MiB")
+        # smtplib normalizes a str to SMTP CRLF line endings before DATA.
+        # Passing as_bytes() directly would send bare LF to some servers.
+        payload = msg.as_string()
+        print(f"[Emailer] {variant}: {len(payload.encode('utf-8')) / 1024 / 1024:.2f} MiB")
         for attempt in range(1, attempts + 1):
             server = None
             stage = "connect"

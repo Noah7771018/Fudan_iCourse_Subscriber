@@ -127,6 +127,17 @@ def merge(local_path: str, remote_path: str):
                     WHERE excluded.last_seen_at > all_courses.last_seen_at
                 """)
 
+            # Keep the daily email checkpoint when the local run is merged
+            # into the latest data branch before re-sharding.  ISO dates sort
+            # lexicographically, so a stale concurrent run cannot roll it back.
+            conn.execute("""
+                INSERT INTO main.meta (key, value)
+                SELECT key, value FROM local.meta
+                WHERE key = 'last_daily_email_date'
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                WHERE excluded.value > main.meta.value
+            """)
+
     finally:
         # Persist COURSE_IDS from the CI secret into the meta table so
         # the frontend can read the current subscription list from the
@@ -153,3 +164,4 @@ if __name__ == "__main__":
         sys.exit(1)
     merge(sys.argv[1], sys.argv[2])
     print("Merge complete.")
+

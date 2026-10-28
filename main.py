@@ -17,6 +17,7 @@ Anything more interesting belongs in one of ``src/*`` modules.
 import datetime
 import time
 import traceback
+from zoneinfo import ZoneInfo
 
 from src.runtime import config
 from src.data.database import Database
@@ -246,17 +247,29 @@ def _send_email(emailer: Emailer | None, db: Database, reporter: Reporter,
                 })
         reporter.email_recovered_unsent(len(unsent))
 
-    if not (emailer and email_items):
+    if emailer is None or not emailer.receiver:
+        raise RuntimeError(
+            "Email is not configured: SMTP_EMAIL, SMTP_PASSWORD and "
+            "RECEIVER_EMAIL must all be set."
+        )
+
+    today = datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    if not email_items and db.read_meta("last_daily_email_date") == today:
+        reporter.info("[Email] Today's status email was already sent.")
         return
-    try:
+
+    if email_items:
         reporter.email_summary(len(email_items))
-        if emailer.send(email_items):
-            db.mark_emailed_batch([item["sub_id"] for item in email_items])
-        else:
-            reporter.email_failed()
-    except Exception:
-        reporter.info("[Email] Failed to send:")
-        traceback.print_exc()
+    else:
+        reporter.info("[Email] No new summaries; sending daily status email.")
+
+    if not emailer.send(email_items):
+        reporter.email_failed()
+        raise RuntimeError("Daily email delivery failed; see [Emailer] logs.")
+
+    if email_items:
+        db.mark_emailed_batch([item["sub_id"] for item in email_items])
+    db.write_meta("last_daily_email_date", today)
 
 
 def _crawl_semester_catalog(client: ICourseClient, db: Database,
@@ -368,3 +381,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+

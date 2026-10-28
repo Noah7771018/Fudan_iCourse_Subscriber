@@ -2,6 +2,8 @@ import re
 import smtplib
 import time
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from io import BytesIO
@@ -282,6 +284,38 @@ class Emailer:
         self.password = config.SMTP_PASSWORD
         self.receiver = config.RECEIVER_EMAIL
 
+    def _deliver(self, msg, variant: str, attempts: int = 3) -> bool:
+        """Send one MIME variant, logging the SMTP stage on failure."""
+        payload = msg.as_bytes()
+        print(f"[Emailer] {variant}: {len(payload) / 1024 / 1024:.2f} MiB")
+        for attempt in range(1, attempts + 1):
+            server = None
+            stage = "connect"
+            try:
+                server = smtplib.SMTP_SSL(self.host, self.port, timeout=30)
+                stage = "login"
+                server.login(self.sender, self.password)
+                stage = "send"
+                refused = server.sendmail(self.sender, self.receiver, payload)
+                if refused:
+                    raise smtplib.SMTPRecipientsRefused(refused)
+                print(f"[Emailer] Sent {variant}: {msg['Subject']}")
+                return True
+            except Exception as exc:
+                print(
+                    f"[Emailer] {variant} attempt {attempt}/{attempts} "
+                    f"failed at {stage}: {type(exc).__name__}: {exc}"
+                )
+                if attempt < attempts:
+                    time.sleep(2 ** (attempt - 1))
+            finally:
+                if server is not None:
+                    try:
+                        server.close()
+                    except OSError:
+                        pass
+        return False
+
     def send(self, items: list[dict]) -> bool:
         """Send a single email containing all lecture summaries.
 
@@ -302,7 +336,17 @@ class Emailer:
             True if email was sent successfully, False otherwise.
         """
         if not items:
-            return True
+            now = datetime.now(ZoneInfo("Asia/Shanghai"))
+            subject = f"[FiCS] {now:%Y-%m-%d} 每日课程检查：暂无新摘要"
+            msg = MIMEText(
+                f"本次检查时间：{now:%Y-%m-%d %H:%M}（北京时间）\n"
+                "本次检查没有生成新的课程摘要。\n",
+                "plain", "utf-8",
+            )
+            msg["Subject"] = subject
+            msg["From"] = formataddr(("iCourse Subscriber", self.sender))
+            msg["To"] = self.receiver
+            return self._deliver(msg, "daily status")
 
         any_update = any(item.get("is_update") for item in items)
 
@@ -407,18 +451,16 @@ class Emailer:
         if cid_images:
             print(f"[Emailer] Embedded {len(cid_images)} LaTeX images as CID")
 
-        # Retry with exponential backoff
-        for attempt in range(3):
-            try:
-                with smtplib.SMTP_SSL(self.host, self.port) as server:
-                    server.login(self.sender, self.password)
-                    server.sendmail(self.sender, self.receiver, msg.as_string())
-                print(f"[Emailer] Sent: {subject}")
-                return True
-            except Exception as e:
-                print(f"[Emailer] Attempt {attempt + 1}/3 failed: {e}")
-                if attempt < 2:
-                    time.sleep(2 ** attempt)
+        if self._deliver(msg, "rich summary", attempts=2):
+            return True
 
-        print("[Emailer] All send attempts failed.")
-        return False
+        # Some SMTP servers close the connection while receiving a large
+        # message with many CID images.  Keep every summary in a much smaller
+        # plain-text message so a rendering problem does not lose the email.
+        fallback = MIMEText(plain, "plain", "utf-8")
+        fallback["Subject"] = subject
+        fallback["From"] = formataddr(("iCourse Subscriber", self.sender))
+        fallback["To"] = self.receiver
+        print("[Emailer] Rich delivery failed; trying plain-text fallback.")
+        return self._deliver(fallback, "plain summary")
+

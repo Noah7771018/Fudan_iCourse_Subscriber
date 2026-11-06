@@ -379,6 +379,62 @@ def run():
     reporter.run_footer()
 
 
-if __name__ == "__main__":
-    run()
+def _repair_october_23_lecture():
+    """Replace the truncated ASR and its summary together for lecture 748588."""
+    course_id, sub_id = "40781", "748588"
+    if config.COURSE_IDS != [course_id]:
+        raise RuntimeError("Run this repair with course ID 40781.")
+    db = Database()
+    try:
+        lecture = db.get_lecture(sub_id)
+        if not lecture or str(lecture["course_id"]) != course_id:
+            raise RuntimeError("Target lecture is missing from the existing database.")
+        if len((lecture.get("transcript") or "").strip()) > 100:
+            print("The target already has a longer transcript. No repair needed.")
+            return
 
+        transcriber = Transcriber()
+        reporter = Reporter()
+        for attempt in range(1, 4):
+            scheduler = Scheduler(reporter=reporter)
+            try:
+                client = ICourseClient(login_with_retry())
+                downloader = scheduler.audio_downloader
+                downloader.schedule(client, course_id, sub_id)
+                handle = downloader.get(sub_id, timeout=120)
+                if handle is None:
+                    raise RuntimeError("No playback stream.")
+                transcript, segments = transcriber.transcribe_tail(
+                    handle.path, handle.process, handle.stderr_chunks,
+                )
+                # The original playback advertised 9811 seconds.
+                if transcriber._last_duration < 0.99 * 9811 or len(transcript.strip()) < 500:
+                    raise RuntimeError("Audio or transcript is incomplete.")
+            except Exception as exc:
+                print(f"Repair attempt {attempt} failed: {type(exc).__name__}.")
+                if attempt == 3:
+                    raise RuntimeError("Could not obtain a complete lecture transcript.") from None
+            else:
+                break
+            finally:
+                scheduler.shutdown()
+
+        prompt, _ = bucketer.assemble(transcript, segments, db.get_done_ppt_pages(sub_id))
+        summary, model = Summarizer().summarize("习近平新时代中国特色社会主义思想概论", prompt)
+        if not summary.strip():
+            raise RuntimeError("No replacement summary was generated.")
+        with db.conn:
+            db.conn.execute(
+                """UPDATE lectures
+                   SET transcript = ?, summary = ?, summary_model = ?,
+                       error_stage = NULL, error_msg = NULL, error_count = 0
+                   WHERE sub_id = ? AND course_id = ?""",
+                (transcript, summary, model, sub_id, course_id),
+            )
+        print(f"Repaired {sub_id}: {len(transcript)} transcript chars, {len(summary)} summary chars.")
+    finally:
+        db.conn.close()
+
+
+if __name__ == "__main__":
+    _repair_october_23_lecture()

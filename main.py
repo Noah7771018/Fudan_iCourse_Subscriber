@@ -28,7 +28,7 @@ from src.runtime.reporter import Reporter
 from src.runtime.scheduler import Scheduler
 from src.ai.summarizer import Summarizer
 from src.ai.transcriber import Transcriber
-from src.api.webvpn import WebVPNSession
+from src.api.webvpn import SecondFactorError, WebVPNSession
 from src.ai import bucketer
 
 
@@ -43,14 +43,18 @@ def login_with_retry(max_attempts: int = 5) -> WebVPNSession:
     row before letting one through.
     """
     for attempt in range(max_attempts):
+        vpn = WebVPNSession()
         try:
-            vpn = WebVPNSession()
             print(f"\n[Login] WebVPN (attempt {attempt + 1}/{max_attempts})...")
             vpn.login()
             print("[Login] iCourse CAS...")
             vpn.authenticate_icourse()
             return vpn
+        except SecondFactorError:
+            vpn.session.close()
+            raise
         except Exception as e:
+            vpn.session.close()
             if attempt < max_attempts - 1:
                 print(f"  Failed: {type(e).__name__}: {e}; retrying...")
                 time.sleep(5)

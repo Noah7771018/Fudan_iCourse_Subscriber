@@ -137,9 +137,11 @@ class ICourseClient:
         title = course_data.get("title", "Unknown")
         teacher = course_data.get("realname", "Unknown")
 
-        # Parse the nested sub_list: {year: {month: {day: [items]}}}
+        # iCourse can encode an empty PHP array as [] instead of {}.
         lectures = []
-        sub_list = course_data.get("sub_list", {})
+        sub_list = course_data.get("sub_list") or {}
+        if not isinstance(sub_list, dict):
+            raise RuntimeError(f"Unexpected lecture list format for course {course_id}")
         for year, months in sub_list.items():
             for month, days in months.items():
                 for day, items in days.items():

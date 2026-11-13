@@ -1,5 +1,6 @@
 import re
 import smtplib
+import ssl
 import time
 import uuid
 from datetime import datetime
@@ -275,7 +276,7 @@ def _resolve_src(url: str, img_data: bytes | None,
 
 
 class Emailer:
-    """Send course summary emails via QQ SMTP SSL."""
+    """Send course summary emails via encrypted QQ SMTP."""
 
     def __init__(self):
         self.host = config.SMTP_HOST
@@ -290,13 +291,19 @@ class Emailer:
         # Passing as_bytes() directly would send bare LF to some servers.
         payload = msg.as_string()
         print(f"[Emailer] {variant}: {len(payload.encode('utf-8')) / 1024 / 1024:.2f} MiB")
+        tls = ssl.create_default_context()
+        use_starttls = False
         for attempt in range(1, attempts + 1):
             server = None
             stage = "connect"
             try:
-                server = smtplib.SMTP_SSL(self.host, self.port, timeout=30)
+                if use_starttls:
+                    server = smtplib.SMTP(self.host, 587, timeout=30)
+                    server.starttls(context=tls)
+                else:
+                    server = smtplib.SMTP_SSL(self.host, self.port, timeout=30, context=tls)
                 stage = "login"
-                server.login(self.sender, self.password)
+                server.login(self.sender, self.password, initial_response_ok=not use_starttls)
                 stage = "send"
                 refused = server.sendmail(self.sender, self.receiver, payload)
                 if refused:
@@ -308,6 +315,8 @@ class Emailer:
                     f"[Emailer] {variant} attempt {attempt}/{attempts} "
                     f"failed at {stage}: {type(exc).__name__}: {exc}"
                 )
+                if stage != "send" and isinstance(exc, (smtplib.SMTPServerDisconnected, TimeoutError)):
+                    use_starttls = True
                 if attempt < attempts:
                     time.sleep(2 ** (attempt - 1))
             finally:

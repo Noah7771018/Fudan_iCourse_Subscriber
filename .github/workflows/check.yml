@@ -2,13 +2,19 @@ name: iCourse Check
 
 on:
   schedule:
-    # Every day at 19:36 BTC (UTC + 8)
-    # 设计这个奇怪的时间是为了避免整点时的github队列峰值，避免排队过久。
-    - cron: "36 11 * * *"
+    # Asia/Shanghai: 12:36, 16:36, 20:36 and 23:36 every day.
+    # Check after classes and again at night for recordings published late.
+    # Avoid the top of the hour to reduce GitHub Actions queue delays.
+    - cron: "36 4,8,12,15 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+
+# Queue overlapping checks instead of processing lectures twice.
+concurrency:
+  group: icourse-check-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   check:
